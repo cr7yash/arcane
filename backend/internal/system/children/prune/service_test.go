@@ -297,6 +297,11 @@ func TestPreparePrunePlanRequestsOnlySelectedUsageTypes(t *testing.T) {
 	require.Equal(t, []string{"sha256:dangling", "app:latest", "app:stable", "sha256:shared"}, removed)
 	mu.Unlock()
 
+	testPrunePlanUnknownImageSizes(t, service)
+	testPrunePlanConcurrentPull(t, service)
+}
+
+func testPrunePlanUnknownImageSizes(t *testing.T, service *Service) {
 	for _, unknownCase := range []struct {
 		name       string
 		sharedSize int
@@ -309,7 +314,9 @@ func TestPreparePrunePlanRequestsOnlySelectedUsageTypes(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				switch {
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/system/df"):
-					_, _ = fmt.Fprintf(w, `{"Images":[{"Id":"%s","Containers":0,"Size":700,"SharedSize":%d},{"Id":"sha256:known","Containers":0,"Size":200,"SharedSize":0}]}`, unknownCase.name, unknownCase.sharedSize)
+					_, _ = fmt.Fprintf(w,
+						`{"Images":[{"Id":"%s","Containers":0,"Size":700,"SharedSize":%d},{"Id":"sha256:known","Containers":0,"Size":200,"SharedSize":0}]}`,
+						unknownCase.name, unknownCase.sharedSize)
 				case r.Method == http.MethodGet && (strings.HasSuffix(r.URL.Path, "/images/"+unknownCase.name+"/json") || strings.HasSuffix(r.URL.Path, "/images/sha256:known/json")):
 					_, _ = fmt.Fprintf(w, `{"Id":"%s"}`, path.Base(path.Dir(r.URL.Path)))
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json"):
@@ -338,7 +345,9 @@ func TestPreparePrunePlanRequestsOnlySelectedUsageTypes(t *testing.T) {
 			require.True(t, unknownResult.SpaceReclaimedUnknown)
 		})
 	}
+}
 
+func testPrunePlanConcurrentPull(t *testing.T, service *Service) {
 	for _, pulledID := range []string{"sha256:pulled", "sha256:shared-zero"} {
 		t.Run("concurrent pull "+pulledID+" does not prove zero reclamation", func(t *testing.T) {
 			var mu sync.Mutex

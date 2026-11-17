@@ -260,18 +260,14 @@ type (
 		NetworksDeleted  []string `json:"networksDeleted,omitempty"`
 		Errors           []string `json:"errors,omitempty"`
 
-		SpaceReclaimed        uint64 `json:"spaceReclaimed"`
-		SpaceReclaimedUnknown bool   `json:"spaceReclaimedUnknown,omitempty"`
-
-		ContainerSpaceReclaimed uint64 `json:"containerSpaceReclaimed,omitempty"`
-
+		SpaceReclaimed             uint64 `json:"spaceReclaimed"`
+		ContainerSpaceReclaimed    uint64 `json:"containerSpaceReclaimed,omitempty"`
 		ImageSpaceReclaimed        uint64 `json:"imageSpaceReclaimed,omitempty"`
+		VolumeSpaceReclaimed       uint64 `json:"volumeSpaceReclaimed,omitempty"`
+		BuildCacheSpaceReclaimed   uint64 `json:"buildCacheSpaceReclaimed,omitempty"`
+		SpaceReclaimedUnknown      bool   `json:"spaceReclaimedUnknown,omitempty"`
 		ImageSpaceReclaimedUnknown bool   `json:"imageSpaceReclaimedUnknown,omitempty"`
-
-		VolumeSpaceReclaimed uint64 `json:"volumeSpaceReclaimed,omitempty"`
-
-		BuildCacheSpaceReclaimed uint64 `json:"buildCacheSpaceReclaimed,omitempty"`
-		Success                  bool   `json:"success"`
+		Success                    bool   `json:"success"`
 	}
 
 	GPUStats struct {

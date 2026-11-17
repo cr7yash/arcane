@@ -982,49 +982,17 @@ func (s *Service) executePrunePlan(
 		if targetProgressErr := jobcontext.Progress(ctx, types.TargetOutcome{
 			ResourceType: resource.Kind,
 			ID:           targetID,
-			Status: func() types.RunStatus {
-				switch {
-				case !exists:
-					return types.RunStatusSucceeded
-				case !eligible:
-					return types.RunStatusSkipped
-				case removeFailed:
-					return types.RunStatusFailed
-				default:
-					return types.RunStatusSucceeded
-				}
-			}(),
-			Message: kit.Ternary(removeFailed, fmt.Sprint(removeErr), ""),
+			Status:       pruneResourceStatus(exists, eligible, removeFailed),
+			Message:      kit.Ternary(removeFailed, fmt.Sprint(removeErr), ""),
 		}); targetProgressErr != nil {
 			return finish(targetProgressErr)
 		}
 	}
-	// Exclusive image sizes miss layers shared only by images deleted in this run.
 	if imageUsageKnown && len(imagesDeleted) > 0 {
-		imageUsageAfter, usageErr := s.pruneDiskUsage(ctx, client.DiskUsageOptions{Images: true, Verbose: true})
-		if usageErr == nil && imageUsageAfter.Images.TotalSize >= 0 && imageUsageAfter.Images.TotalSize <= imageUsageBefore.Images.TotalSize {
-			remaining := make(map[string]bool, len(imageUsageAfter.Images.Items))
-			for _, item := range imageUsageAfter.Images.Items {
-				remaining[item.ID] = true
-			}
-			before := make(map[string]bool, len(imageUsageBefore.Images.Items))
-			for _, item := range imageUsageBefore.Images.Items {
-				before[item.ID] = true
-			}
-			unconfirmedRemoval := slices.ContainsFunc(imageUsageBefore.Images.Items, func(item image.Summary) bool {
-				return !remaining[item.ID] && !slices.Contains(imagesDeleted, item.ID)
-			})
-			concurrentAddition := slices.ContainsFunc(imageUsageAfter.Images.Items, func(item image.Summary) bool {
-				return !before[item.ID]
-			})
-			if !unconfirmedRemoval && !concurrentAddition {
-				reclaimed := uint64(imageUsageBefore.Images.TotalSize - imageUsageAfter.Images.TotalSize)
-				if reclaimed > 0 && reclaimed >= imageSpace {
-					spaceReclaimed += reclaimed - imageSpace
-					imageSpace = reclaimed
-					imageSpaceUnknown = false
-				}
-			}
+		if reclaimed, ok := s.reconciledImageReclaimed(ctx, imageUsageBefore, imagesDeleted, imageSpace); ok {
+			spaceReclaimed += reclaimed - imageSpace
+			imageSpace = reclaimed
+			imageSpaceUnknown = false
 		}
 	}
 	if len(imagesDeleted) > 0 {
@@ -1036,6 +1004,46 @@ func (s *Service) executePrunePlan(
 	spaceReclaimed += reclaimed
 	buildCacheSpace += reclaimed
 	return finish(err)
+}
+
+func pruneResourceStatus(exists, eligible, removeFailed bool) types.RunStatus {
+	switch {
+	case !exists:
+		return types.RunStatusSucceeded
+	case !eligible:
+		return types.RunStatusSkipped
+	case removeFailed:
+		return types.RunStatusFailed
+	default:
+		return types.RunStatusSucceeded
+	}
+}
+
+// Exclusive image sizes miss layers shared only by images deleted in this run.
+func (s *Service) reconciledImageReclaimed(ctx context.Context, usageBefore client.DiskUsageResult, deleted []string, claimed uint64) (uint64, bool) {
+	usageAfter, err := s.pruneDiskUsage(ctx, client.DiskUsageOptions{Images: true, Verbose: true})
+	if err != nil || usageAfter.Images.TotalSize < 0 || usageAfter.Images.TotalSize > usageBefore.Images.TotalSize {
+		return 0, false
+	}
+	remaining := make(map[string]bool, len(usageAfter.Images.Items))
+	for _, item := range usageAfter.Images.Items {
+		remaining[item.ID] = true
+	}
+	before := make(map[string]bool, len(usageBefore.Images.Items))
+	for _, item := range usageBefore.Images.Items {
+		before[item.ID] = true
+	}
+	unconfirmedRemoval := slices.ContainsFunc(usageBefore.Images.Items, func(item image.Summary) bool {
+		return !remaining[item.ID] && !slices.Contains(deleted, item.ID)
+	})
+	concurrentAddition := slices.ContainsFunc(usageAfter.Images.Items, func(item image.Summary) bool {
+		return !before[item.ID]
+	})
+	reclaimed := uint64(usageBefore.Images.TotalSize - usageAfter.Images.TotalSize)
+	if unconfirmedRemoval || concurrentAddition || reclaimed == 0 || reclaimed < claimed {
+		return 0, false
+	}
+	return reclaimed, true
 }
 
 func (s *Service) removePruneResource(ctx context.Context, resource pruneResource) (bool, error) {
