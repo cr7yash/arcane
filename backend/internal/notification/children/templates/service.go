@@ -233,6 +233,7 @@ func (s *Service) BatchContainerUpdate(environmentName string, entries []notific
 }
 
 func (s *Service) PruneReport(environmentName string, result *types.PruneAllResult) notifications.Content {
+	totalReclaimed, imageReclaimed := notifications.PruneReclaimedLabels(result)
 	defaultTitle := notifications.BuildEmailSubject(environmentName, "System Prune Report")
 	return notifications.Content{
 		Text: notifications.TextByFormat(func(format notifications.MessageFormat) string {
@@ -247,9 +248,9 @@ func (s *Service) PruneReport(environmentName string, result *types.PruneAllResu
 				Rows: []emailRow{
 					{Label: "Environment", Value: environmentName},
 					{Label: "Status", Value: kit.Ternary(len(result.Errors) > 0, "Finished with errors: "+strings.Join(result.Errors, "; "), "Completed")},
-					{Label: "Total Reclaimed", Value: notifications.FormatBytes(result.SpaceReclaimed)},
+					{Label: "Total Reclaimed", Value: totalReclaimed},
 					{Label: "Containers", Value: notifications.FormatBytes(result.ContainerSpaceReclaimed)},
-					{Label: "Images", Value: notifications.FormatBytes(result.ImageSpaceReclaimed)},
+					{Label: "Images", Value: imageReclaimed},
 					{Label: "Volumes", Value: notifications.FormatBytes(result.VolumeSpaceReclaimed)},
 					{Label: "Build Cache", Value: notifications.FormatBytes(result.BuildCacheSpaceReclaimed)},
 					{Label: "Time", Value: time.Now().Format(time.RFC1123)},
@@ -261,7 +262,7 @@ func (s *Service) PruneReport(environmentName string, result *types.PruneAllResu
 			}
 			subject := notifications.BuildEmailSubject(environmentName, fmt.Sprintf(
 				"System Prune Report: %s Reclaimed%s",
-				notifications.FormatBytes(result.SpaceReclaimed),
+				totalReclaimed,
 				kit.Ternary(len(result.Errors) > 0, fmt.Sprintf(", %d Error(s)", len(result.Errors)), ""),
 			))
 			return subject, htmlBody, nil

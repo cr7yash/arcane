@@ -906,8 +906,10 @@ func (s *NotificationService) SendPruneReportNotification(ctx context.Context, r
 
 func (s *NotificationService) sendPruneReportNotificationForTarget(ctx context.Context, target NotificationTarget, result *types.PruneAllResult) (int, error) {
 	metadata := database.JSON{
-		"spaceReclaimed": result.SpaceReclaimed,
-		"eventType":      string(notifications.NotificationEventPruneReport),
+		"spaceReclaimed":             result.SpaceReclaimed,
+		"spaceReclaimedUnknown":      result.SpaceReclaimedUnknown,
+		"imageSpaceReclaimedUnknown": result.ImageSpaceReclaimedUnknown,
+		"eventType":                  string(notifications.NotificationEventPruneReport),
 	}
 	content := s.templates.PruneReport(target.EnvironmentName, result)
 	content.Vars = notifications.EventVars(target.EnvironmentName, target.EnvironmentID, notifications.NotificationEventPruneReport)

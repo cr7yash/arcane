@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/client"
 	"github.com/samber/mo"
 	"golang.org/x/sync/errgroup"
@@ -65,10 +66,11 @@ type (
 	}
 
 	pruneResource struct {
-		Kind  string   `json:"kind"`
-		ID    string   `json:"id"`
-		Names []string `json:"names,omitempty"`
-		Size  int64    `json:"size"`
+		Kind        string   `json:"kind"`
+		ID          string   `json:"id"`
+		Names       []string `json:"names,omitempty"`
+		Size        int64    `json:"size"`
+		SizeUnknown bool     `json:"sizeUnknown,omitempty"`
 	}
 
 	prunePlan struct {
@@ -728,10 +730,11 @@ func (s *Service) selectPruneImages(req types.PruneAllRequest, usage client.Disk
 			continue
 		}
 		resources = append(resources, pruneResource{
-			Kind:  "image",
-			ID:    item.ID,
-			Size:  kit.Ternary(item.SharedSize >= 0, item.Size-item.SharedSize, 0),
-			Names: slices.Clone(item.RepoTags),
+			Kind:        "image",
+			ID:          item.ID,
+			Size:        kit.Ternary(item.SharedSize >= 0 && item.Size >= item.SharedSize, item.Size-item.SharedSize, 0),
+			SizeUnknown: item.SharedSize != 0 || item.Size < 0,
+			Names:       slices.Clone(item.RepoTags),
 		})
 	}
 	return resources, nil
@@ -893,24 +896,36 @@ func (s *Service) executePrunePlan(
 ) (*types.PruneAllResult, error) {
 	var containersPruned, imagesDeleted, volumesDeleted, networksDeleted, errs []string
 	var spaceReclaimed, containerSpace, imageSpace, volumeSpace, buildCacheSpace uint64
+	var imageSpaceUnknown bool
 	finish := func(err error) (*types.PruneAllResult, error) {
 		if err != nil {
 			errs = append(errs, err.Error())
 		}
 		return &types.PruneAllResult{
-			ContainersPruned:         containersPruned,
-			ImagesDeleted:            imagesDeleted,
-			VolumesDeleted:           volumesDeleted,
-			NetworksDeleted:          networksDeleted,
-			SpaceReclaimed:           spaceReclaimed,
-			ContainerSpaceReclaimed:  containerSpace,
-			ImageSpaceReclaimed:      imageSpace,
-			VolumeSpaceReclaimed:     volumeSpace,
-			BuildCacheSpaceReclaimed: buildCacheSpace,
-			Success:                  len(errs) == 0,
-			Errors:                   errs,
-			ActivityID:               mo.EmptyableToOption(activityID).ToPointer(),
+			ContainersPruned:           containersPruned,
+			ImagesDeleted:              imagesDeleted,
+			VolumesDeleted:             volumesDeleted,
+			NetworksDeleted:            networksDeleted,
+			SpaceReclaimed:             spaceReclaimed,
+			SpaceReclaimedUnknown:      imageSpaceUnknown,
+			ContainerSpaceReclaimed:    containerSpace,
+			ImageSpaceReclaimed:        imageSpace,
+			ImageSpaceReclaimedUnknown: imageSpaceUnknown,
+			VolumeSpaceReclaimed:       volumeSpace,
+			BuildCacheSpaceReclaimed:   buildCacheSpace,
+			Success:                    len(errs) == 0,
+			Errors:                     errs,
+			ActivityID:                 mo.EmptyableToOption(activityID).ToPointer(),
 		}, err
+	}
+	var imageUsageBefore client.DiskUsageResult
+	imageUsageKnown := false
+	if slices.ContainsFunc(plan.Resources, func(resource pruneResource) bool { return resource.Kind == "image" }) {
+		usage, usageErr := s.pruneDiskUsage(ctx, client.DiskUsageOptions{Images: true, Verbose: true})
+		if usageErr == nil && usage.Images.TotalSize > 0 && len(usage.Images.Items) > 0 {
+			imageUsageBefore = usage
+			imageUsageKnown = true
+		}
 	}
 	for _, resource := range plan.Resources {
 		if resource.Kind == "build_cache" {
@@ -933,9 +948,9 @@ func (s *Service) executePrunePlan(
 		if eligibleErr != nil {
 			return finish(eligibleErr)
 		}
-		removeErr := func() error {
+		removed, removeErr := func() (bool, error) {
 			if !exists || !eligible {
-				return nil
+				return false, nil
 			}
 			return s.removePruneResource(ctx, resource)
 		}()
@@ -945,14 +960,17 @@ func (s *Service) executePrunePlan(
 		}
 		if exists && eligible && !removeFailed {
 			// Something else removed it first; do not claim its bytes.
-			claimed := kit.Ternary(removeErr == nil && size > 0, uint64(size), 0)
+			claimed := kit.Ternary(removed && size > 0, uint64(size), 0)
 			spaceReclaimed += claimed
 			switch resource.Kind {
 			case "container":
 				containersPruned = append(containersPruned, resource.ID)
 				containerSpace += claimed
 			case "image":
-				imagesDeleted = append(imagesDeleted, resource.ID)
+				if removed {
+					imagesDeleted = append(imagesDeleted, resource.ID)
+					imageSpaceUnknown = imageSpaceUnknown || resource.SizeUnknown
+				}
 				imageSpace += claimed
 			case "volume":
 				volumesDeleted = append(volumesDeleted, resource.ID)
@@ -981,6 +999,34 @@ func (s *Service) executePrunePlan(
 			return finish(targetProgressErr)
 		}
 	}
+	// Exclusive image sizes miss layers shared only by images deleted in this run.
+	if imageUsageKnown && len(imagesDeleted) > 0 {
+		imageUsageAfter, usageErr := s.pruneDiskUsage(ctx, client.DiskUsageOptions{Images: true, Verbose: true})
+		if usageErr == nil && imageUsageAfter.Images.TotalSize >= 0 && imageUsageAfter.Images.TotalSize <= imageUsageBefore.Images.TotalSize {
+			remaining := make(map[string]bool, len(imageUsageAfter.Images.Items))
+			for _, item := range imageUsageAfter.Images.Items {
+				remaining[item.ID] = true
+			}
+			before := make(map[string]bool, len(imageUsageBefore.Images.Items))
+			for _, item := range imageUsageBefore.Images.Items {
+				before[item.ID] = true
+			}
+			unconfirmedRemoval := slices.ContainsFunc(imageUsageBefore.Images.Items, func(item image.Summary) bool {
+				return !remaining[item.ID] && !slices.Contains(imagesDeleted, item.ID)
+			})
+			concurrentAddition := slices.ContainsFunc(imageUsageAfter.Images.Items, func(item image.Summary) bool {
+				return !before[item.ID]
+			})
+			if !unconfirmedRemoval && !concurrentAddition {
+				reclaimed := uint64(imageUsageBefore.Images.TotalSize - imageUsageAfter.Images.TotalSize)
+				if reclaimed > 0 && reclaimed >= imageSpace {
+					spaceReclaimed += reclaimed - imageSpace
+					imageSpace = reclaimed
+					imageSpaceUnknown = false
+				}
+			}
+		}
+	}
 	if len(imagesDeleted) > 0 {
 		if deleteRecordsForImagesErr := s.imageUpdateService.DeleteRecordsForImages(ctx, imagesDeleted); deleteRecordsForImagesErr != nil {
 			return finish(deleteRecordsForImagesErr)
@@ -992,13 +1038,13 @@ func (s *Service) executePrunePlan(
 	return finish(err)
 }
 
-func (s *Service) removePruneResource(ctx context.Context, resource pruneResource) error {
+func (s *Service) removePruneResource(ctx context.Context, resource pruneResource) (bool, error) {
 	switch resource.Kind {
 	case "container":
 		_, err := s.dockerService.Call(ctx, func(ctx context.Context, cli *client.Client) (client.ContainerRemoveResult, error) {
 			return cli.ContainerRemove(ctx, resource.ID, client.ContainerRemoveOptions{})
 		})
-		return err
+		return err == nil, err
 	case "image":
 		for _, name := range resource.Names {
 			inspected, inspectErr := s.dockerService.Call(ctx, func(ctx context.Context, cli *client.Client) (client.ImageInspectResult, error) {
@@ -1008,27 +1054,33 @@ func (s *Service) removePruneResource(ctx context.Context, resource pruneResourc
 				continue
 			}
 			if inspectErr != nil {
-				return inspectErr
+				return false, inspectErr
 			}
 			if inspected.ID != resource.ID {
 				continue
 			}
-			if _, err := s.dockerService.Call(ctx, func(ctx context.Context, cli *client.Client) (client.ImageRemoveResult, error) {
+			removed, err := s.dockerService.Call(ctx, func(ctx context.Context, cli *client.Client) (client.ImageRemoveResult, error) {
 				return cli.ImageRemove(ctx, name, client.ImageRemoveOptions{PruneChildren: false})
-			}); err != nil {
-				return err
+			})
+			if err != nil {
+				return false, err
+			}
+			if slices.ContainsFunc(removed.Items, func(item image.DeleteResponse) bool { return item.Deleted == resource.ID }) {
+				return true, nil
 			}
 		}
-		_, err := s.dockerService.Call(ctx, func(ctx context.Context, cli *client.Client) (client.ImageRemoveResult, error) {
+		removed, err := s.dockerService.Call(ctx, func(ctx context.Context, cli *client.Client) (client.ImageRemoveResult, error) {
 			return cli.ImageRemove(ctx, resource.ID, client.ImageRemoveOptions{PruneChildren: false})
 		})
-		return err
+		return slices.ContainsFunc(removed.Items, func(item image.DeleteResponse) bool { return item.Deleted == resource.ID }), err
 	case "volume":
-		return s.volumeService.DeleteVolume(ctx, resource.ID, false, types.SystemUser)
+		err := s.volumeService.DeleteVolume(ctx, resource.ID, false, types.SystemUser)
+		return err == nil, err
 	case "network":
-		return s.networkService.RemoveNetwork(ctx, resource.ID, types.SystemUser)
+		err := s.networkService.RemoveNetwork(ctx, resource.ID, types.SystemUser)
+		return err == nil, err
 	default:
-		return fmt.Errorf("unknown prune target %q", resource.Kind)
+		return false, fmt.Errorf("unknown prune target %q", resource.Kind)
 	}
 }
 

@@ -260,11 +260,13 @@ type (
 		NetworksDeleted  []string `json:"networksDeleted,omitempty"`
 		Errors           []string `json:"errors,omitempty"`
 
-		SpaceReclaimed uint64 `json:"spaceReclaimed"`
+		SpaceReclaimed        uint64 `json:"spaceReclaimed"`
+		SpaceReclaimedUnknown bool   `json:"spaceReclaimedUnknown,omitempty"`
 
 		ContainerSpaceReclaimed uint64 `json:"containerSpaceReclaimed,omitempty"`
 
-		ImageSpaceReclaimed uint64 `json:"imageSpaceReclaimed,omitempty"`
+		ImageSpaceReclaimed        uint64 `json:"imageSpaceReclaimed,omitempty"`
+		ImageSpaceReclaimedUnknown bool   `json:"imageSpaceReclaimedUnknown,omitempty"`
 
 		VolumeSpaceReclaimed uint64 `json:"volumeSpaceReclaimed,omitempty"`
 

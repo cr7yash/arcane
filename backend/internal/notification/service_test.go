@@ -280,6 +280,24 @@ func TestBuildPruneReportNotificationMessage_IncludesEnvironment(t *testing.T) {
 
 	require.Contains(t, message, "**Environment:** Cluster One")
 	require.Equal(t, 1, strings.Count(message, "Environment"))
+
+	unknown := notifications.BuildPruneReportNotificationMessage(notifications.MessageFormatMarkdown, "Cluster One", &types.PruneAllResult{
+		ImagesDeleted:              []string{"sha256:unknown"},
+		SpaceReclaimed:             100,
+		ImageSpaceReclaimed:        20,
+		SpaceReclaimedUnknown:      true,
+		ImageSpaceReclaimedUnknown: true,
+	})
+	require.Contains(t, unknown, "**Total Space Reclaimed:** unknown")
+	require.Contains(t, unknown, "- Images: unknown")
+	require.NotContains(t, unknown, "Total Space Reclaimed:** 100 B")
+
+	ntfyUnknown := notifications.BuildPruneReportNotificationMessage(notifications.MessageFormatNtfyMarkdown, "Cluster One", &types.PruneAllResult{
+		SpaceReclaimedUnknown:      true,
+		ImageSpaceReclaimedUnknown: true,
+	})
+	require.Contains(t, ntfyUnknown, "💾 **unknown** reclaimed")
+	require.Contains(t, ntfyUnknown, "📦 Images: unknown")
 }
 
 func TestBuildAutoHealNotificationMessage_IncludesEnvironment(t *testing.T) {

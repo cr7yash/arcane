@@ -350,7 +350,21 @@ func BuildVulnerabilitySummaryNotificationMessage(format MessageFormat, environm
 	return message.String()
 }
 
+// PruneReclaimedLabels formats known totals and marks unknown image space.
+func PruneReclaimedLabels(result *types.PruneAllResult) (total, images string) {
+	total = FormatBytes(result.SpaceReclaimed)
+	images = FormatBytes(result.ImageSpaceReclaimed)
+	if result.SpaceReclaimedUnknown {
+		total = "unknown"
+	}
+	if result.ImageSpaceReclaimedUnknown {
+		images = "unknown"
+	}
+	return total, images
+}
+
 func BuildPruneReportNotificationMessage(format MessageFormat, environmentName string, result *types.PruneAllResult) string {
+	totalReclaimed, imageReclaimed := PruneReclaimedLabels(result)
 	var message strings.Builder
 
 	if format == MessageFormatNtfyMarkdown {
@@ -358,9 +372,9 @@ func BuildPruneReportNotificationMessage(format MessageFormat, environmentName s
 		fmt.Fprintf(
 			&message,
 			"💾 **%s** reclaimed\n\n",
-			FormatBytes(result.SpaceReclaimed),
+			totalReclaimed,
 		)
-		fmt.Fprintf(&message, "📦 Images: %s\n", FormatBytes(result.ImageSpaceReclaimed))
+		fmt.Fprintf(&message, "📦 Images: %s\n", imageReclaimed)
 		fmt.Fprintf(&message, "🧱 Containers: %s\n", FormatBytes(result.ContainerSpaceReclaimed))
 		fmt.Fprintf(&message, "💿 Volumes: %s\n", FormatBytes(result.VolumeSpaceReclaimed))
 		fmt.Fprintf(&message, "🛠️ Build cache: %s\n", FormatBytes(result.BuildCacheSpaceReclaimed))
@@ -376,10 +390,10 @@ func BuildPruneReportNotificationMessage(format MessageFormat, environmentName s
 
 	fmt.Fprintf(&message, "%s\n\n", formatNotificationTitle(format, "🧹 System Prune Report"))
 	fmt.Fprintf(&message, "%s %s\n", formatNotificationLabel(format, "Environment"), environmentName)
-	fmt.Fprintf(&message, "%s %s\n\n", formatNotificationLabel(format, "Total Space Reclaimed"), FormatBytes(result.SpaceReclaimed))
+	fmt.Fprintf(&message, "%s %s\n\n", formatNotificationLabel(format, "Total Space Reclaimed"), totalReclaimed)
 	fmt.Fprintf(&message, "%s\n", formatNotificationLabel(format, "Breakdown"))
 	fmt.Fprintf(&message, "- Containers: %s\n", FormatBytes(result.ContainerSpaceReclaimed))
-	fmt.Fprintf(&message, "- Images: %s\n", FormatBytes(result.ImageSpaceReclaimed))
+	fmt.Fprintf(&message, "- Images: %s\n", imageReclaimed)
 	fmt.Fprintf(&message, "- Volumes: %s\n", FormatBytes(result.VolumeSpaceReclaimed))
 	fmt.Fprintf(&message, "- Build Cache: %s\n", FormatBytes(result.BuildCacheSpaceReclaimed))
 	if len(result.Errors) > 0 {

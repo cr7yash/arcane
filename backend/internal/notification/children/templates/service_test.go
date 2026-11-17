@@ -117,4 +117,14 @@ func TestService_RenderPruneReportEmailTemplate_IncludesEnvironment(t *testing.T
 	for _, size := range []string{"3.6 GiB", "480.0 MiB", "2.3 GiB", "612.0 MiB", "219.5 MiB"} {
 		require.Contains(t, htmlBody, size)
 	}
+
+	unknownSubject, unknownBody, err := svc.PruneReport("Cluster West", &types.PruneAllResult{
+		ImagesDeleted:              []string{"sha256:unknown"},
+		SpaceReclaimedUnknown:      true,
+		ImageSpaceReclaimedUnknown: true,
+	}).RenderEmail()
+	require.NoError(t, err)
+	require.Contains(t, unknownSubject, "System Prune Report: unknown Reclaimed")
+	require.Contains(t, unknownBody, "<strong>Total Reclaimed</strong></td><td>unknown")
+	require.Contains(t, unknownBody, "<strong>Images</strong></td><td>unknown")
 }

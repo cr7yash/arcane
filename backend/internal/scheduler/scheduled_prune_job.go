@@ -85,9 +85,20 @@ func (j *ScheduledPruneJob) Run(ctx context.Context) (types.SchedulerOutcome, er
 		return types.SchedulerOutcome{Status: types.RunStatusSkipped}, nil
 	}
 
+	var spaceReclaimed any = result.SpaceReclaimed
+	var imageSpaceReclaimed any = result.ImageSpaceReclaimed
+	if result.SpaceReclaimedUnknown {
+		spaceReclaimed = "unknown"
+	}
+	if result.ImageSpaceReclaimedUnknown {
+		imageSpaceReclaimed = "unknown"
+	}
 	slog.InfoContext(ctx, "scheduled prune run completed",
 		"success", result.Success,
-		"spaceReclaimedBytes", result.SpaceReclaimed,
+		"spaceReclaimedBytes", spaceReclaimed,
+		"knownSpaceReclaimedBytes", result.SpaceReclaimed,
+		"imageSpaceReclaimedBytes", imageSpaceReclaimed,
+		"knownImageSpaceReclaimedBytes", result.ImageSpaceReclaimed,
 		"containersPruned", len(result.ContainersPruned),
 		"imagesDeleted", len(result.ImagesDeleted),
 		"volumesDeleted", len(result.VolumesDeleted),
